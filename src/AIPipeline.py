@@ -1,69 +1,52 @@
-from collections import deque
-
+import re
 import torch
-import json
 
-from transformers import pipeline, Pipeline, AutoTokenizer, AutoModelForCausalLM, GPT2TokenizerFast
-from dataclasses import dataclass, asdict
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from dataclasses import dataclass
 
-@dataclass
-class Message:
-    content: str
-    role: str = "user"
+from src.AIPipelineContext import AIPipelineContext
+
 
 @dataclass
 class Response:
     thinking: str
     response: str
 
-class AIContext:
-    max_new_tokens: int
-    dtype: torch.dtype = torch.float16
-    device: str
-    model: str
-    # task: str
-    kwargs: dict = {}
 
-    def __init__(self, model, device, task: str, max_new_tokens: int, dtype: torch.dtype, **kwargs):
-        self.max_new_tokens = max_new_tokens
-        self.dtype = dtype
-        self.model = model
-        self.device = device
-        self.task = task
-        self.kwargs = kwargs
+def parse_response(raw: str) -> Response:
+    pattern = r"<think>(.*?)</think>(.*)"
 
-class AIPipeline2:
-    pipe: Pipeline
-    message_history: deque[Message]
-    ctx: AIContext
+    match = re.search(pattern, raw, re.DOTALL)
+    if match:
+        between_think_tags = match.group(1)
+        after_think_tag = match.group(2)
+        return Response(between_think_tags, after_think_tag)
+    else:
+        return Response("", raw)
+
+
+class AIPipeline:
+    ctx: AIPipelineContext
     tokenizer: AutoTokenizer
     model: AutoModelForCausalLM
 
-    def __init__(self, ctx: AIContext):
-        self.message_history = deque(maxlen=10)
+    def __init__(self, ctx: AIPipelineContext):
         self.ctx = ctx
         self.model = AutoModelForCausalLM.from_pretrained(ctx.model, device_map=ctx.device, torch_dtype=ctx.dtype)
         self.tokenizer = AutoTokenizer.from_pretrained(ctx.model)
 
-    def add_template(self, template: Message):
-        self.message_history.append(template)
+    def query(self, query: list[dict[str, str]]) -> Response:
+        response = self._tokenize_query(query)
+        return parse_response(response[0])
 
-    def query(self, query: Message, think: bool = True) -> Response:
-        messages = [asdict(msg) for msg in self.message_history] + [asdict(query)]
-        json_input = json.dumps(messages)
+    def _tokenize_query(self, query: list[dict[str, str]]):
+        text = self.tokenizer.apply_chat_template(query, tokenize=False, add_generation_prompt=True)
+        model_inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+        return self._multinomial_decode(model_inputs)
 
-        text = self.tokenizer.apply_chat_template(json_input, tokenize=False, add_generation_prompt=True, enable_thinking=think)
-        model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+    def _multinomial_decode(self, model_inputs: torch.Tensor):
+        torch.manual_seed(0)
+        outputs = self.model.generate(**model_inputs, do_sample=True, max_length=self.ctx.max_new_tokens)
+        return self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
-        generated_ids = self.model.generate(**model_inputs, max_new_tokens=self.ctx.max_new_tokens)
-        output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
 
-        try:
-            index = len(output_ids) - output_ids[::-1].index(151668)
-        except ValueError:
-            index = 0
-
-        thinking_content = self.tokenizer.decode(output_ids[:index], skip_special_tokens=True)
-        content = self.tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip('\n')
-
-        return Response(thinking_content, content)
