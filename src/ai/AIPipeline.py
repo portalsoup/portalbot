@@ -4,7 +4,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from dataclasses import dataclass
 
-from src.AIPipelineContext import AIPipelineContext
+from src.ai.AIPipelineContext import AIPipelineContext
 
 
 @dataclass

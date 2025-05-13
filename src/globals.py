@@ -12,6 +12,7 @@ def init_args() -> argparse.Namespace:
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument("-m", "--model", type=str, default="Qwen/Qwen3-1.7B", help="Model to use")
     parser.add_argument("-t", "--think", action="store_true", help="Enable thinking")
+    parser.add_argument("-d", "--discord-token", type=str, help="Discord bot token")
 
     return parser.parse_args()
 
